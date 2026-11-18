@@ -1,15 +1,16 @@
 import {NextResponse} from 'next/server';
 export const dynamic='force-dynamic';
-export async function GET(){
+export async function GET(request:Request){
  const base='https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leagues/1118939070';
  const headers={'Accept':'application/json','User-Agent':'Mozilla/5.0'};
  const diagnostics:string[]=[];
  try{
-  const r=await fetch(base+'/transactions?view=mTransactions2',{cache:'no-store',headers});
+  const week=new URL(request.url).searchParams.get('week');
+  const r=await fetch(base+'/transactions?view=mTransactions2'+(week?'&scoringPeriodId='+encodeURIComponent(week):''),{cache:'no-store',headers});
   if(!r.ok)return NextResponse.json({trades:[],notice:'ESPN transactions request returned HTTP '+r.status,diagnostics});
   const payload=await r.json();
   const all:any[]=Array.isArray(payload)?payload:Array.isArray(payload.transactions)?payload.transactions:[];
-  diagnostics.push('ESPN returned '+all.length+' transactions.');
+  diagnostics.push('Requested week '+(week||'default')+'; ESPN returned '+all.length+' transactions.');
   const count=(key:string)=>Object.entries(all.reduce((acc:Record<string,number>,t:any)=>{const k=String(t[key]??'(missing)');acc[k]=(acc[k]||0)+1;return acc},{})).sort((a:any,b:any)=>b[1]-a[1]).slice(0,25);
   diagnostics.push('Transaction types: '+JSON.stringify(count('type')));
   diagnostics.push('Transaction statuses: '+JSON.stringify(count('status')));
