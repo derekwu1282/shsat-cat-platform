@@ -28,10 +28,12 @@ export async function GET(){
   id:String(t.id||t.transactionId||t.processDate||t.proposedDate),
   date:t.processDate||t.executionDate||t.proposedDate||null,
   status:t.status||'COMPLETED',
-  teams:Array.isArray(t.teamIds)?t.teamIds:[],
+  teams:Array.isArray(t.teamIds)?t.teamIds:Array.isArray(t.teams)?t.teams.map((x:any)=>typeof x==='object'?x.id:x):[],
   items:(t.items||[]).map((i:any)=>({playerId:i.playerId||i.player?.id,fromTeamId:i.fromTeamId,toTeamId:i.toTeamId,type:i.type,playerName:i.player?.fullName||i.player?.name||i.playerName||null})),
   scoringPeriodId:t.scoringPeriodId||null
  }));
+ const first=all.find(t=>String(t.type||t.transactionType||'').toUpperCase().includes('TRADE'));
+ if(first){diagnostics.push('Trade record fields: '+Object.keys(first).join(', '));diagnostics.push('Trade record structure (IDs only): '+JSON.stringify({id:first.id,type:first.type,status:first.status,teamIds:first.teamIds,items:first.items,actions:first.actions,transactionItems:first.transactionItems}).slice(0,4500));}
  const notice=trades.length?'':all.length?'ESPN returned transactions, but none were identified as completed trades.':'ESPN returned no transactions through the available public endpoints. Your league may require ESPN authentication to access trade history.';
  return NextResponse.json({trades,notice,diagnostics},{headers:{'Cache-Control':'no-store'}});
 }
