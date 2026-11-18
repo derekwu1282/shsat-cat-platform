@@ -1,0 +1,3 @@
+import {NextResponse} from 'next/server';
+export const dynamic='force-dynamic';
+export async function GET(){try{const url='https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leagues/1118939070?view=mTeam&view=mStandings&view=mMatchupScore&view=mMatchup&view=mSettings';const r=await fetch(url,{cache:'no-store',headers:{Accept:'application/json','User-Agent':'Mozilla/5.0'}});if(!r.ok)return NextResponse.json({error:'ESPN returned '+r.status},{status:502});const data=await r.json();return NextResponse.json(data,{headers:{'Cache-Control':'no-store'}})}catch(e){return NextResponse.json({error:String(e)},{status:502})}}
