@@ -1,20 +1,37 @@
 import {NextResponse} from 'next/server';
 export const dynamic='force-dynamic';
 export async function GET(){
- try{
-  const base='https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leagues/1118939070';
-  const response=await fetch(base+'/transactions?view=mTransactions2',{cache:'no-store',headers:{Accept:'application/json','User-Agent':'Mozilla/5.0'}});
-  if(!response.ok)return NextResponse.json({trades:[],notice:'ESPN transaction history is unavailable (HTTP '+response.status+'). The league may require authentication.'});
-  const json=await response.json();
-  const raw=Array.isArray(json)?json:Array.isArray(json.transactions)?json.transactions:[];
-  const trades=raw.filter((t:any)=>String(t.type||t.transactionType||'').toUpperCase().includes('TRADE')&& !['VETOED','CANCELED','REJECTED','PROPOSED','PENDING'].includes(String(t.status||'').toUpperCase())).map((t:any)=>({
-   id:String(t.id||t.transactionId||t.processDate||Math.random()),
-   date:t.processDate||t.executionDate||t.proposedDate||null,
-   status:t.status||'',
-   teams:Array.isArray(t.teamIds)?t.teamIds:[],
-   items:(t.items||[]).map((i:any)=>({playerId:i.playerId,fromTeamId:i.fromTeamId,toTeamId:i.toTeamId,type:i.type,playerName:i.player?.fullName||i.player?.name||i.playerName||null})),
-   scoringPeriodId:t.scoringPeriodId||null
-  }));
-  return NextResponse.json({trades,notice:trades.length?'':'No completed trades were returned by ESPN. This can also happen when transaction history is restricted.'},{headers:{'Cache-Control':'no-store'}});
- }catch(e){return NextResponse.json({trades:[],notice:'Could not load ESPN trade history: '+String(e)})}
+ const base='https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leagues/1118939070';
+ const headers={'Accept':'application/json','User-Agent':'Mozilla/5.0','x-fantasy-filter':JSON.stringify({transactions:{filterType:{value:['TRADE']}}})};
+ const attempts=[base+'?view=mTransactions2',base+'/transactions?view=mTransactions2',base+'?view=mTransactions'];
+ const diagnostics:string[]=[];
+ const all:any[]=[];
+ for(const url of attempts){
+  try{
+   const res=await fetch(url,{cache:'no-store',headers});
+   if(!res.ok){diagnostics.push(new URL(url).pathname+' HTTP '+res.status);continue}
+   const json=await res.json();
+   const candidates=Array.isArray(json)?json:Array.isArray(json.transactions)?json.transactions:Array.isArray(json?.league?.transactions)?json.league.transactions:[];
+   diagnostics.push(new URL(url).pathname+' returned '+candidates.length+' transactions; fields: '+Object.keys(json||{}).slice(0,12).join(','));
+   all.push(...candidates);
+  }catch(e){diagnostics.push(String(e))}
+ }
+ const seen=new Set<string>();
+ const trades=all.filter(t=>{
+  const type=String(t.type||t.transactionType||t.typeId||'').toUpperCase();
+  const status=String(t.status||'').toUpperCase();
+  const id=String(t.id||t.transactionId||JSON.stringify(t));
+  if(seen.has(id))return false;
+  seen.add(id);
+  return (type.includes('TRADE')||type==='2')&&!['VETOED','CANCELED','REJECTED','PROPOSED','PENDING','FAILED'].includes(status);
+ }).map(t=>({
+  id:String(t.id||t.transactionId||t.processDate||t.proposedDate),
+  date:t.processDate||t.executionDate||t.proposedDate||null,
+  status:t.status||'COMPLETED',
+  teams:Array.isArray(t.teamIds)?t.teamIds:[],
+  items:(t.items||[]).map((i:any)=>({playerId:i.playerId||i.player?.id,fromTeamId:i.fromTeamId,toTeamId:i.toTeamId,type:i.type,playerName:i.player?.fullName||i.player?.name||i.playerName||null})),
+  scoringPeriodId:t.scoringPeriodId||null
+ }));
+ const notice=trades.length?'':all.length?'ESPN returned transactions, but none were identified as completed trades.':'ESPN returned no transactions through the available public endpoints. Your league may require ESPN authentication to access trade history.';
+ return NextResponse.json({trades,notice,diagnostics},{headers:{'Cache-Control':'no-store'}});
 }
