@@ -10,20 +10,23 @@ export async function GET(request:Request){
 
   if(!week&&!params.has('raw')&&!params.has('rosters')){
    const get=async(url:string,extra:Record<string,string>={})=>{const r=await fetch(url,{cache:'no-store',headers:{...headers,...extra}});if(!r.ok)throw Error('ESPN HTTP '+r.status);return r.json()};
-   const league=await get(base+'?view=mTeam&view=mStatus');
+   const [league,statResponse]=await Promise.all([get(base+'?view=mStatus'),fetch('https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_2026.csv',{cache:'no-store'})]);
+   if(!statResponse.ok)throw Error('nflverse HTTP '+statResponse.status);
+   const csv=await statResponse.text();
+   const parse=(line:string)=>(line.match(/("(?:[^"]|"")*"|[^,]*)(,|$)/g)||[]).filter((v,i,a)=>i<a.length-1||v!=='').map(v=>v.replace(/,$/,'').replace(/^"|"$/g,'').replace(/""/g,'"'));
+   const lines=csv.trim().split(/\r?\n/);
+   const columns=parse(lines[0]);
+   const col=(name:string)=>columns.indexOf(name);
+   if(col('fantasy_points')<0||col('fantasy_points_ppr')<0||col('player_display_name')<0||col('week')<0)throw Error('Unexpected nflverse schema');
+   const norm=(v:string)=>v.toLowerCase().replace(/[^a-z0-9]/g,'').replace(/(jr|iii|ii)$/,'');
+   const points=new Map<string,number>(), names=new Set<string>(), counts=new Map<number,number>();
+   for(const line of lines.slice(1)){const row=parse(line);if(row[col('season_type')]!=='REG')continue;const w=Number(row[col('week')]);const key=norm(row[col('player_display_name')]||'');const standard=Number(row[col('fantasy_points')]),ppr=Number(row[col('fantasy_points_ppr')]);if(!key||!w||!Number.isFinite(standard)||!Number.isFinite(ppr))continue;names.add(key);counts.set(w,(counts.get(w)||0)+1);points.set(key+':'+w,Math.round((standard+ppr)*50)/100);}
    const current=Number(league.status?.currentMatchupPeriod||11);
-   const snapshots=await Promise.all(Array.from({length:Math.min(current,18)},(_,i)=>get(base+'?view=mRoster&scoringPeriodId='+(i+1)).catch(()=>null)));
-   const players=new Map<string,number>();
-   const points=new Map<string,number>();
-   const knownWeeks=new Set<string>();
-   snapshots.forEach((j,idx)=>{for(const t of j?.teams||[])for(const e of t.roster?.entries||[]){const p=e.playerPoolEntry?.player;if(!p)continue;players.set(p.fullName,Number(e.playerId));if(Array.isArray(p.stats)&&p.stats.some((st:any)=>st.statSourceId===0&&st.statSplitTypeId===1))knownWeeks.add(e.playerId+':'+(idx+1));for(const st of p.stats||[])if(st.statSourceId===0&&st.statSplitTypeId===1&&Number.isFinite(st.appliedTotal))points.set(e.playerId+':'+st.scoringPeriodId,st.appliedTotal)}});
    const seeds:any[]=[[1,2,11,["Rome Odunze","Travis Etienne Jr."],["CeeDee Lamb","Jordan Mason"]],[1,3,10,["Josh Allen","Chris Olave"],["Drake London","Caleb Williams"]],[6,5,10,["Harold Fannin Jr.","Chase Brown","Michael Wilson"],["Colston Loveland","Omarion Hampton","Garrett Wilson"]],[6,7,11,["Davante Adams"],["Chuba Hubbard"]],[7,2,3,["Breece Hall","Ladd McConkey"],["Zay Flowers","Roschon Johnson"]],[8,7,12,["Rhamondre Stevenson"],["Stefon Diggs"]],[10,4,9,["Mike Evans"],["Audric Estime","Jeremiyah Love"]],[11,5,3,["Jonathan Taylor"],["Kyren Williams"]]];
-   const trades=seeds.map(([start,a,b,left,right],idx)=>({id:'confirmed-'+idx,status:'Confirmed',date:null,scoringPeriodId:start,teams:[a,b],items:[...left.map((name:string)=>({playerName:name,playerId:players.get(name)||null,fromTeamId:b,toTeamId:a})),...right.map((name:string)=>({playerName:name,playerId:players.get(name)||null,fromTeamId:a,toTeamId:b}))]}));
-   const ids=trades.flatMap(t=>t.items.map(i=>i.playerId)).filter(Boolean);
-   const filter=JSON.stringify({players:{filterIds:{value:ids},limit:100}});
-   try{const j=await get(base+'?view=kona_player_info',{'x-fantasy-filter':filter});for(const e of j.players||[]){const p=e.player||e;for(const st of p.stats||[])if(st.statSourceId===0&&st.statSplitTypeId===1&&Number.isFinite(st.appliedTotal))points.set(p.id+':'+st.scoringPeriodId,st.appliedTotal)}}catch{}
-   const scored=trades.map(t=>({...t,weekly:Array.from({length:Math.max(0,current-t.scoringPeriodId)},(_,i)=>{const week=t.scoringPeriodId+i;const totals=t.teams.map(team=>{const vals=t.items.filter(x=>x.toTeamId===team).map(x=>(points.get(x.playerId+':'+week)??(knownWeeks.has(x.playerId+':'+week)?0:undefined)));return vals.every(v=>v!==undefined)?vals.reduce<number>((a,b)=>a+(b||0),0):null});return {week,totals}})}));
-   return NextResponse.json({trades:scored,notice:'Eight confirmed historical trades. Automatic discovery of new trades is not yet verified; refresh retrieves current ESPN scoring data.',diagnostics:[],refreshedAt:new Date().toISOString()});
+   const trades=seeds.map(([start,a,b,left,right],idx)=>({id:'confirmed-'+idx,status:'Confirmed',date:null,scoringPeriodId:start,teams:[a,b],items:[...left.map((name:string)=>({playerName:name,fromTeamId:b,toTeamId:a})),...right.map((name:string)=>({playerName:name,fromTeamId:a,toTeamId:b}))]}));
+   const scored=trades.map(t=>({...t,weekly:Array.from({length:Math.max(0,current-t.scoringPeriodId)},(_,i)=>{const week=t.scoringPeriodId+i;const totals=t.teams.map(team=>{const vals=t.items.filter(x=>x.toTeamId===team).map(x=>{const key=norm(x.playerName);return (counts.get(week)||0)>100&&names.has(key)?points.get(key+':'+week)??0:null});return vals.every(v=>v!==null)?Math.round(vals.reduce<number>((a,b)=>a+(b||0),0)*100)/100:null});return {week,totals}})}));
+   return NextResponse.json({trades:scored,notice:'Weekly offensive half-PPR stats from nflverse. Eight confirmed trades; automatic discovery of new trades is not yet verified.',diagnostics:[],refreshedAt:new Date().toISOString(),source:'nflverse',coverage:[...counts.keys()]});
+
   }
   const r=await fetch(base+'/transactions?view=mTransactions2'+(week?'&scoringPeriodId='+encodeURIComponent(week):''),{cache:'no-store',headers});
   if(!r.ok)return NextResponse.json({trades:[],notice:'ESPN transactions request returned HTTP '+r.status,diagnostics});
