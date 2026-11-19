@@ -5,7 +5,8 @@ export async function GET(request:Request){
  const headers={'Accept':'application/json','User-Agent':'Mozilla/5.0'};
  const diagnostics:string[]=[];
  try{
-  const week=new URL(request.url).searchParams.get('week');
+  const params=new URL(request.url).searchParams; const week=params.get('week');
+  if(params.get('rosters')==='1'){const rr=await fetch(base+'?view=mRoster&view=mTeam&scoringPeriodId='+encodeURIComponent(week||'1'),{cache:'no-store',headers});const j=await rr.json();return NextResponse.json({week,teams:(j.teams||[]).map((t:any)=>({id:t.id,name:t.name||t.location+' '+t.nickname,players:(t.roster?.entries||[]).map((e:any)=>({id:e.playerId,name:e.playerPoolEntry?.player?.fullName}))}))});}
   const r=await fetch(base+'/transactions?view=mTransactions2'+(week?'&scoringPeriodId='+encodeURIComponent(week):''),{cache:'no-store',headers});
   if(!r.ok)return NextResponse.json({trades:[],notice:'ESPN transactions request returned HTTP '+r.status,diagnostics});
   const payload=await r.json();
@@ -18,6 +19,7 @@ export async function GET(request:Request){
   diagnostics.push('Trade-related transactions: '+likely.length);
   diagnostics.push('Trade-related type/status breakdown: '+JSON.stringify(likely.reduce((acc:Record<string,number>,t:any)=>{const k=String(t.type)+' / '+String(t.status);acc[k]=(acc[k]||0)+1;return acc},{})));
   diagnostics.push('Trade sample structure (IDs, no personal data): '+JSON.stringify(likely.slice(0,5).map((t:any)=>({type:t.type,status:t.status,id:t.id,relatedTransactionId:t.relatedTransactionId,scoringPeriodId:t.scoringPeriodId,itemCount:t.items?.length,items:(t.items||[]).slice(0,4).map((i:any)=>({type:i.type,playerId:i.playerId,fromTeamId:i.fromTeamId,toTeamId:i.toTeamId}))}))).slice(0,5000));
+  if(params.get('raw')==='1')return NextResponse.json({week,records:likely.map(t=>({id:t.id,relatedTransactionId:t.relatedTransactionId,type:t.type,status:t.status,teamId:t.teamId,proposedDate:t.proposedDate,processDate:t.processDate,items:t.items})),moves:all.filter(t=>['WAIVER','FREEAGENT','DRAFT'].includes(t.type)&&t.status==='EXECUTED').map(t=>({type:t.type,items:t.items}))});
   const trades=all.filter(t=>String(t.type||t.transactionType||'').toUpperCase().includes('TRADE')&&['EXECUTED','COMPLETED','PROCESSED'].includes(String(t.status||'').toUpperCase())).map(t=>{
    const items=(Array.isArray(t.items)?t.items:[]).filter((i:any)=>i.playerId!=null&&i.fromTeamId!=null&&i.toTeamId!=null).map((i:any)=>({playerId:Number(i.playerId),fromTeamId:Number(i.fromTeamId),toTeamId:Number(i.toTeamId),playerName:i.player?.fullName||i.playerName||null}));
    const teams=[...new Set<number>(items.flatMap((i:any)=>[i.fromTeamId,i.toTeamId]))];
